@@ -28,26 +28,21 @@ class Kokoro:
         vocab_config: dict | str | None = None,
     ):
         # Show useful information for bug reports
-        log.debug(
+        print(
             f"koko-onnx version {importlib.metadata.version('kokoro-onnx')} on {platform.platform()} {platform.version()}"
         )
         self.config = KoKoroConfig(model_path, voices_path, espeak_config)
         self.config.validate()
 
-        # See list of providers https://github.com/microsoft/onnxruntime/issues/22101#issuecomment-2357667377
-        providers = ["CPUExecutionProvider"]
-
         # Check if kokoro-onnx installed with kokoro-onnx[gpu] feature (Windows/Linux)
-        gpu_enabled = importlib.util.find_spec("onnxruntime-gpu")
-        if gpu_enabled:
-            providers: list[str] = rt.get_available_providers()
+        providers: list[str] = rt.get_available_providers()
 
         # Check if ONNX_PROVIDER environment variable was set
         env_provider = os.getenv("ONNX_PROVIDER")
         if env_provider:
             providers = [env_provider]
 
-        log.debug(f"Providers: {providers}")
+        print(f"Providers: {providers}")
         self.sess = rt.InferenceSession(model_path, providers=providers)
         self.voices: np.ndarray = np.load(voices_path)
 
@@ -90,20 +85,12 @@ class Kokoro:
             return vocab_config["vocab"]
         return {}
 
-    def _create_audio(
+    def _create_audio_internal(
         self, phonemes: str, voice: NDArray[np.float32], speed: float
-    ) -> tuple[NDArray[np.float32], int]:
-        log.debug(f"Phonemes: {phonemes}")
-        if len(phonemes) > MAX_PHONEME_LENGTH:
-            log.warning(
-                f"Phonemes are too long, truncating to {MAX_PHONEME_LENGTH} phonemes"
-            )
+    ) -> NDArray[np.float32]:
         phonemes = phonemes[:MAX_PHONEME_LENGTH]
         start_t = time.time()
-        tokens = np.array(self.tokenizer.tokenize(phonemes), dtype=np.int64)
-        assert len(tokens) <= MAX_PHONEME_LENGTH, (
-            f"Context length is {MAX_PHONEME_LENGTH}, but leave room for the pad token 0 at the start & end"
-        )
+        tokens = self.tokenizer.tokenize(phonemes)
 
         voice = voice[len(tokens)]
         tokens = [[0, *tokens, 0]]
@@ -128,7 +115,34 @@ class Kokoro:
         log.debug(
             f"Created audio in length of {audio_duration:.2f}s for {len(phonemes)} phonemes in {create_duration:.2f}s (RTF: {rtf:.2f}"
         )
-        return audio, SAMPLE_RATE
+        return audio
+    
+
+    def _create_audio(
+        self, phonemes: str, voice: NDArray[np.float32], speed: float
+    ) -> tuple[NDArray[np.float32], int]:
+        log.debug(f"Phonemes: {phonemes}")
+        if len(phonemes) > MAX_PHONEME_LENGTH:
+            log.warning(
+                f"Phonemes are too long, batching to {MAX_PHONEME_LENGTH} phonemes, phonemes: {phonemes}"
+            )
+
+        samples = None
+            
+        def batch(iterable, n=1):
+            l = len(iterable)
+            for ndx in range(0, l, n):
+                yield iterable[ndx:min(ndx + n, l)]
+        
+        for phoneme_batch in batch(phonemes, MAX_PHONEME_LENGTH):
+            temp_samples = self._create_audio_internal(phoneme_batch, voice, speed)
+
+            if samples is None:
+                samples = temp_samples
+            else:
+                samples = np.concatenate(samples, temp_samples)
+
+        return samples, SAMPLE_RATE
 
     def get_voice_style(self, name: str) -> NDArray[np.float32]:
         return self.voices[name]

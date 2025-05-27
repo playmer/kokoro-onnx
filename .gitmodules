@@ -1,0 +1,3 @@
+[submodule "src/ebooklib"]
+	path = src/ebooklib
+	url = https://github.com/playmer/ebooklib.git

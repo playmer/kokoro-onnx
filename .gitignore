@@ -25,3 +25,10 @@ espeak-ng-data/
 
 # Virtual environments
 .venv
+
+books/
+epubs_to_process/
+finished_epubs/
+
+*.exe
+test.log
