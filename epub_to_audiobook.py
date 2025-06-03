@@ -148,6 +148,7 @@ def process_toc(book):
     toc_items = []
     def gather_toc(items, depth=0):
         for item in items:
+
             indent = "  " * depth
             if isinstance(item, tuple):
                 section_title, section_items = item
@@ -157,6 +158,7 @@ def process_toc(book):
                 # Skip if title suggests it's front matter
                 if (item.title.lower() in ['copy', 'copyright', 'title page', 'cover'] or
                     item.title.lower().startswith('by')):
+                    print('\tskipped')
                     continue
                 
                 toc_items.append((item.title, item.href))
@@ -195,16 +197,18 @@ def process_chapters(book):
             text_content = soup.get_text().strip()
 
             chapter_name, file_extension = os.path.splitext(os.path.basename(file_name))
-            
-            
-            if text_content:
-                order += 1
 
-                chapters.append({
-                    'title': chapter_name,
-                    'content': text_content,
-                    'order': order
-                })
+            if not text_content:
+                text_content = None
+            
+            order += 1
+            chapters.append({
+                'title': chapter_name,
+                'content': text_content,
+                'order': order,
+                'file_name': file_name
+            })
+            
 
     return chapters
 
@@ -215,21 +219,46 @@ def process_chapters(book):
 def get_merged_chapters(chapters, chapter_files, toc_items):
     associated_chapters_and_files = []
     
+    # print('start audios')
+    # for item in chapter_files:
+    #     print(f'\t{item}')
+    # print('end')
+
+    
+    print('start chapters')
+    for item in chapters:
+        print(f'\t{item['title']} -- {item['file_name']}')
+    print('end')
+
     for chapter in chapters:
+        if chapter['content'] is None:
+            #print(f'No content {chapter['title']}')
+            associated_chapters_and_files.append({
+                'title': chapter['title'],
+                'order': chapter['order'],
+                'wav_file': None
+            })
+            continue
+
         for chapter_file in chapter_files:
             chapter_file_base_name, file_extension = os.path.splitext(os.path.basename(chapter_file))
             chapter_file_order_and_name = chapter_file_base_name.split('-', 1)
             chapter_file_order = chapter_file_order_and_name[0].lstrip('0')
             chapter_file_name = chapter_file_order_and_name[1]
 
-            if chapter_file_order == str(chapter['order']) and chapter_file_name == chapter['title']:
+            #if chapter_file_order == str(chapter['order']) and chapter_file_name == chapter['title']:
+            if chapter_file_name == chapter['title']:
                 associated_chapters_and_files.append({
                     'title': chapter['title'],
-                    'content': chapter['content'],
                     'order': chapter['order'],
                     'wav_file': chapter_file
                 })
                 break
+
+    # print('start associated chapters')
+    # for item in associated_chapters_and_files:
+    #     print(f'\t{item['title']} -- {item['wav_file']}')
+    # print('end')
 
     # for chapter in associated_chapters_and_files:
     #     print(f'\t{chapter['order']}; {chapter['title']}; {chapter['wav_file']}')
@@ -247,7 +276,6 @@ def get_merged_chapters(chapters, chapter_files, toc_items):
             if filename == chapter['title']:
                 associated_chapters.append({
                     'title': chapter['title'],
-                    'content': chapter['content'],
                     'order': chapter['order'],
                     'wav_file': chapter['wav_file'],
                     'actual_title': toc_item[0]
@@ -259,7 +287,6 @@ def get_merged_chapters(chapters, chapter_files, toc_items):
         if not added:
             associated_chapters.append({
                 'title': chapter['title'],
-                'content': chapter['content'],
                 'order': chapter['order'],
                 'wav_file': chapter['wav_file'],
                 'actual_title': None
@@ -318,10 +345,17 @@ def merge_chapters(merged_chapters, book_path, metadata):
         chapter_data = []
 
         for subchapter in chapter['subchapters']:
-            chunk_data = wave.open(subchapter['wav_file'], 'rb')
-            chapter_data.append([chunk_data.getparams(), chunk_data.readframes(chunk_data.getnframes())])
-            chunk_data.close()
+            if subchapter['wav_file'] is not None:
+                print(f'used {subchapter['title']}')
+                chunk_data = wave.open(subchapter['wav_file'], 'rb')
+                chapter_data.append([chunk_data.getparams(), chunk_data.readframes(chunk_data.getnframes())])
+                chunk_data.close()
+            else:
+                print(f'skipped {subchapter['title']}')
 
+        if len(chapter_data) == 0:
+            continue
+        
         merged_chapter_file = os.path.join(merged_chapters_path, f'chapter_{chapter['order']}.wav')
         output = wave.open(merged_chapter_file, 'wb')
         output.setparams(chapter_data[0][0])
@@ -463,18 +497,9 @@ def process_epub(input_file):
             
         print(input_file)
 
-        # if len(chapter_files) == 0:
-        #     print('\tNot done generating audio...')
-        #     return
-
-        # if (book_name == 'ReZERO -Starting Life in Another World- Ex v02 - The Love Song of the Sword Devil'):
-        #     print('\tSomething funky happening here...')
-        #     return
-        
         if not os.path.isdir(chunks_path):
             os.makedirs(chunks_path, exist_ok=True)
             tts.kokoro_tts(input_file=input_file, output_file=None, debug=True, voice='am_michael', split_output=chunks_path)
-            #subprocess.run(['python', 'kokoro-tts', input_file, '--debug', '--voice', 'am_michael', '--split-output', chunks_path])
 
         segments_path.mkdir(parents=True, exist_ok=True)
         chunks_to_segments(chunks_path, segments_path)
@@ -491,11 +516,20 @@ def process_epub(input_file):
         book = epub.read_epub(input_file, options={ 'ignore_ncx': True })
         
         toc_items = process_toc(book)
-        chapters = process_chapters(book)
+        # for item in toc_items:
+        #     print(item)
 
-        if len(chapters) != len(segment_files):
-            print("This book doesn't have all the chapters turned to audio expected")
-            return
+        chapters = process_chapters(book)
+        
+        # print('Chapters')
+        # for item in chapters:
+        #     print(f'\t{item['title']} -- {item['file_name']}')
+
+        # This check is probably not good considering we want to process chapters that have no content
+        # for the sake of having a working Table of Contents, hence this commented out.
+        # if len(chapters) != len(segment_files):
+        #     print("This book doesn't have all the chapters turned to audio expected")
+        #     return
         
         any_non_wav = False
         for chapter_file in segment_files:
@@ -508,6 +542,14 @@ def process_epub(input_file):
             return
         
         merged_chapters = get_merged_chapters(chapters, segment_files, toc_items)
+        
+        print("merged_chapters")
+        for item in merged_chapters:
+            print(f'\t{item['chapter_title']}')
+
+            for subitem in item['subchapters']:
+                print(f'\t\t{subitem['title']} -- {subitem['wav_file']}')
+
         make_m4b(book_name, merged_chapters, book_path, book_name, 'Tappei Nagatsuki')
         os.replace(input_file, f'finished_epubs/{book_name}{book_file_extension}')
     except Exception as e:
@@ -515,8 +557,8 @@ def process_epub(input_file):
         traceback_str = ''.join(traceback.format_tb(e.__traceback__))
         print(f"\nError: Full stack trace message: \n{traceback_str}")
 
-        shutil.rmtree(chunks_path, True)
-        shutil.rmtree(book_path, True)
+        # shutil.rmtree(chunks_path, True)
+        # shutil.rmtree(book_path, True)
 
 if __name__ == "__main__":
     #process_epub("epubs_to_process/ReZERO -Starting Life in Another World- Ex v01 - The Dream of the Lion King.epub")
